@@ -1,0 +1,346 @@
+#include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include <iostream>
+#include <math.h>
+
+using namespace cv;
+using namespace std;
+
+#define MAX_ITERS_KERNEL_SIZE 10
+#define THRESH_PARAM 3.5		//threshold value(kernel size estimation) = maxValue / THRESH_PARAM
+#define FILTER_SIZE_PARAM 10		//filter size = imageSize / FILTER_SIZE_PARAM
+
+Mat blurImage(const Mat &image, int kernelSize);
+void computeDFT(const Mat &image, Mat *result);
+void computeIDFT(Mat *input, Mat &result);
+Mat wienerFilter(const Mat &blurredImage, const Mat &known, float k);
+void rotate(const Mat &src, Mat &dst);
+void blindDeblurringOneChannel(const Mat &blurred, Mat &deblurred, Mat &kernel, int kernelSize, int iters, float noisePower, float stopRMSValue);
+void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters, float noisePower, float stopRMSValue);
+void applyConstraints(Mat &image);
+float calculateRMS(const Mat &image1, const Mat &image2);
+float calcBlurriness(const Mat &src);
+Mat getAutoCerrelation(const Mat &blurred);
+int estimateKernelSize(const Mat &blurred);
+void cropBorder(Mat &image);
+
+int main(int argc, char* argv[])
+{
+    String file;
+    file = argv[1];
+    /*
+    int kernelSize = atoi(argv[2]);
+    Mat image = imread(file, CV_LOAD_IMAGE_COLOR);
+    Mat blurred = blurImage(image, kernelSize);
+    */
+    Mat blurred = imread(file, CV_LOAD_IMAGE_COLOR);
+    Mat deblurred;
+    Mat kernel;
+    blindDeblurring(blurred, deblurred, kernel, 100, 0.1, 0.75);
+    imwrite("deblurred.png", deblurred);
+    return 0;
+}
+
+Mat getAutoCerrelation(const Mat &blurred)
+{
+    Mat dst;
+    int ddepth = CV_16S;
+    Laplacian(blurred, dst, -1, 3, 1, 0, BORDER_CONSTANT);
+    dst.convertTo(dst, CV_32FC1);
+    Mat correlation;
+    filter2D(dst, correlation, -1, dst, Point(-1,-1), 0, BORDER_CONSTANT);
+    return correlation.clone();
+}
+
+void cropBorder(Mat &thresholded)
+{
+    int upper = 0;
+    int left = 0;
+    int right = 0;
+    int down = 0;
+    for (int i = 0; i < thresholded.rows; i++)
+    {
+        for (int j = 0; j < thresholded.cols; j++)
+        {
+            if (thresholded.at<unsigned char>(i ,j) == 255)
+            {
+                upper = i;
+                break;
+            }
+        }
+        if (upper)
+            break;
+    }
+
+    for (int i = thresholded.rows - 1; i > 0; i--)
+    {
+        for (int j = 0; j < thresholded.cols; j++)
+        {
+            if (thresholded.at<unsigned char>(i ,j) == 255)
+            {
+                down = i;
+                break;
+            }
+        }
+        if (down)
+            break;
+    }
+
+    for (int i = 0; i < thresholded.cols; i++)
+    {
+        for (int j = 0; j < thresholded.rows; j++)
+        {
+            if (thresholded.at<unsigned char>(j ,i) == 255)
+            {
+                left = i;
+                break;
+            }
+        }
+        if (left)
+            break;
+    }
+
+    for (int i = thresholded.cols - 1; i > 0; i--)
+    {
+        for (int j = 0; j < thresholded.rows; j++)
+        {
+            if (thresholded.at<unsigned char>(j, i) == 255)
+            {
+                right = i;
+                break;
+            }
+        }
+        if (right)
+            break;
+    }
+    /*
+    int side = min(down - upper, right - left);
+    int posX = thresholded.cols / 2 - side / 2;
+    int posY = thresholded.rows / 2 - side / 2;
+    thresholded = thresholded(Rect(posX, posY, side, side));
+    */
+    thresholded = thresholded(Rect(left, upper, right - left, down - upper));
+}
+
+int estimateKernelSize(const Mat &blurred)
+{
+    int kernelSize = 0;
+    Mat grayBlurred;
+    cvtColor(blurred, grayBlurred, CV_BGR2GRAY);
+    Mat correlation = getAutoCerrelation(grayBlurred);
+    Mat thresholded = correlation.clone();
+    for(int i = 0; i < MAX_ITERS_KERNEL_SIZE; i++)
+    {
+        Mat thresholdedNEW;
+        double minVal;
+        double maxVal;
+        minMaxLoc(thresholded, &minVal, &maxVal);
+        threshold(thresholded, thresholded, round(maxVal / THRESH_PARAM), 255, THRESH_BINARY);
+        thresholded.convertTo(thresholded, CV_8UC1);
+        cropBorder(thresholded);
+        if (thresholded.rows < 3)
+        {
+            break;
+        }
+        int filterSize = (int)(max(3, ((thresholded.rows + thresholded.cols) / 2)/FILTER_SIZE_PARAM));
+        if (!(filterSize & 1))
+        {
+            filterSize++;
+        }
+        Mat filter = Mat::ones(filterSize, filterSize, CV_32FC1) / (float)(filterSize * filterSize - 1);
+        filter.at<float>(filterSize/2, filterSize/2) = 0;
+        filter2D(thresholded, thresholdedNEW, -1, filter, Point(-1, -1), 0, BORDER_CONSTANT);
+        kernelSize = (thresholdedNEW.rows + thresholdedNEW.cols) / 2;
+        if (!(kernelSize & 1))
+        {
+            kernelSize++;
+        }
+        thresholded = thresholdedNEW.clone();
+    }
+    cout << "estimated kernel size " << kernelSize << endl;
+    return kernelSize;
+}
+
+Mat blurImage(const Mat &image, int kernelSize)
+{
+    cout << "original kernel size " << kernelSize << endl;
+    Mat blurred = image.clone();
+    /// Applying Homogeneous blur
+    blur(image, blurred, Size(kernelSize, kernelSize), Point(-1,-1));
+    /// Applying Gaussian blur
+    //GaussianBlur(image, blurred, Size(kernelSize, kernelSize), 0, 0);
+    /// Applaying Median blur
+    //medianBlur(image, blurred, kernelSize);
+    imwrite("blur.png", blurred);
+    return blurred;
+}
+
+void computeDFT(const Mat &image, Mat *result)
+{
+    Mat padded;
+    int m = getOptimalDFTSize(image.rows);
+    int n = getOptimalDFTSize(image.cols);
+    copyMakeBorder(image, padded, 0, m - image.rows, 0, n - image.cols, BORDER_CONSTANT, Scalar::all(0));
+    Mat planes[] = {Mat_<float>(padded), Mat::zeros(padded.size(), CV_32FC1)};
+    Mat fimg;
+    merge(planes, 2, fimg);
+    dft(fimg, fimg);
+    split(fimg, planes);
+    /// crop result
+    planes[0] = planes[0](Rect(0, 0, image.cols, image.rows));
+    planes[1] = planes[1](Rect(0, 0, image.cols, image.rows));
+    result[0] = planes[0].clone();
+    result[1] = planes[1].clone();
+}
+
+void computeIDFT(Mat *input, Mat &result)
+{
+    Mat fimg;
+    merge(input, 2, fimg);
+    Mat inverse;
+    idft(fimg, inverse, DFT_REAL_OUTPUT + DFT_SCALE);
+    result = inverse.clone();
+}
+
+void rotate(Mat &src, Mat &dst)
+{
+    int cx = src.cols >> 1;
+    int cy = src.rows >> 1;
+    Mat tmp;
+    tmp.create(src.size(), src.type());
+    src(Rect(0, 0, cx, cy)).copyTo(tmp(Rect(cx, cy, cx, cy)));
+    src(Rect(cx, cy, cx, cy)).copyTo(tmp(Rect(0, 0, cx, cy)));
+    src(Rect(cx, 0, cx, cy)).copyTo(tmp(Rect(0, cy, cx, cy)));
+    src(Rect(0, cy, cx, cy)).copyTo(tmp(Rect(cx, 0, cx, cy)));
+    dst = tmp.clone();
+}
+
+void applyConstraints(Mat &image)
+{
+    for (int i = 0; i < image.rows; i++){
+        for (int j = 0; j < image.cols; j++){
+            if (image.at<float>(i, j) < 0)
+            {
+                image.at<float>(i, j) = 0;
+            }
+            if (image.at<float>(i, j) > 255)
+            {
+                image.at<float>(i, j) = 255; // I am not sure about this constraint
+            }
+        }
+    }
+}
+
+float calculateRMS(const Mat &image1, const Mat &image2)
+{
+    float rms = 0;
+    for (int i = 0; i < image1.rows; i++)
+        for (int j = 0; j < image1.cols; j++)
+            rms += (image1.at<float>(i, j) - image2.at<float>(i, j)) * (image1.at<float>(i, j) - image2.at<float>(i, j));
+    rms/=(image1.rows * image1.cols);
+    return sqrt(rms);
+}
+
+void normalizePSF(Mat &image)
+{
+    float sum = 0;
+    for (int i = 0; i < image.rows; i++)
+    {
+        for (int j = 0; j < image.cols; j++)
+        {
+            sum+=image.at<float>(i, j);
+        }
+    }
+    image/=sum;
+}
+
+void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters, float noisePower, float stopRMSValue)
+{
+    int kernelSize = estimateKernelSize(blurred);
+    vector<Mat> blurredRGB(3);
+    split(blurred, blurredRGB);
+    vector<Mat> deblurredRGB(3);
+    vector<Mat> kernelRGB(3);
+    Mat resultDeblurred;
+    Mat resultKernel;
+    for (int i = 0; i< 3; i++)
+    {
+        blindDeblurringOneChannel(blurredRGB[i], deblurredRGB[i], kernelRGB[i], kernelSize, iters, noisePower, stopRMSValue);
+    }
+    merge(deblurredRGB, resultDeblurred);
+    merge(kernelRGB, resultKernel);
+    deblurred = resultDeblurred.clone();
+    kernel = resultKernel.clone();
+}
+
+void blindDeblurringOneChannel(const Mat &blurred, Mat &deblurred, Mat &kernel, int kernelSize, int iters, float noisePower, float stopRMSValue)
+{
+    Mat kernelCurrent = Mat::ones(kernelSize, kernelSize, CV_32FC1);
+    kernelCurrent/=(kernelSize * kernelSize);
+    Mat kernelPrev;
+    Mat deblurredCurrent;
+    Mat deblurredPrev;
+    float  rms = 0;
+    for (int i = 0; i < iters; i++)
+    {
+        deblurredCurrent = wienerFilter(blurred, kernelCurrent.clone(), noisePower);
+        /*
+        if (i > 0){
+            rms = calculateRMS(deblurredCurrent, deblurredPrev);
+            if (rms <= stopRMSValue){
+                break;
+            }
+        }
+        */
+        kernelCurrent = wienerFilter(blurred, deblurredCurrent, noisePower);
+        kernelCurrent = kernelCurrent(Rect((blurred.cols - kernelSize)/2 ,(blurred.rows - kernelSize)/2, kernelSize, kernelSize));
+        normalizePSF(kernelCurrent);
+        deblurredPrev = deblurredCurrent.clone();
+    }
+    deblurred = deblurredCurrent.clone();
+    kernel = kernelCurrent.clone();
+}
+
+Mat wienerFilter(const Mat &blurredImage, const Mat &known, float noisePower)
+{
+    Mat unknown;
+    int imageWidth = blurredImage.size().width;
+    int imageheight = blurredImage.size().height;
+    Mat yFT[2];
+    computeDFT(blurredImage, yFT);
+
+    Mat padded = Mat::zeros(imageheight, imageWidth, CV_32FC1);
+    int padx = padded.cols - known.cols;
+    int pady = padded.rows - known.rows;
+    copyMakeBorder(known, padded, pady / 2, pady - pady / 2, padx / 2, padx - padx / 2, BORDER_CONSTANT, Scalar::all(0));
+    Mat paddedFT[2];
+
+    computeDFT(padded, paddedFT);
+    float paddedRe;
+    float paddedIm;
+    float module;
+    float denominator;
+    complex<float> numerator;
+    Mat unknowFT[2];
+    unknowFT[0] = Mat::zeros(imageheight, imageWidth, CV_32FC1);
+    unknowFT[1] = Mat::zeros(imageheight, imageWidth, CV_32FC1);
+
+    for (int i = 0; i < padded.rows; i++)
+    {
+        for (int j = 0; j < padded.cols; j++)
+        {
+            paddedRe = paddedFT[0].at<float>(i,j);
+            paddedIm = paddedFT[1].at<float>(i,j);
+            module = paddedRe * paddedRe + paddedIm * paddedIm;
+            denominator = module + noisePower;
+            numerator = complex<float>(paddedRe, -paddedIm) * complex<float>(yFT[0].at<float>(i,j), yFT[1].at<float>(i,j));
+            unknowFT[0].at<float>(i,j) = numerator.real() / denominator;
+            unknowFT[1].at<float>(i,j) = numerator.imag() / denominator;
+        }
+    }
+    computeIDFT(unknowFT, unknown);
+    applyConstraints(unknown);
+    rotate(unknown, unknown);
+    return unknown.clone();
+}
