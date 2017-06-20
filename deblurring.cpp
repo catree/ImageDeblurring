@@ -17,13 +17,14 @@ void computeIDFT(Mat *input, Mat &result);
 void wienerFilter(const Mat &blurredImage, const Mat &known, Mat &unknown, float k);
 void rotate(const Mat &src, Mat &dst);
 void blindDeblurringOneChannel(const Mat &blurred, Mat &deblurred, Mat &kernel, int kernelSize, int iters, float noisePower);
-void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters, float noisePower);
+void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters);
 void applyConstraints(Mat &image);
 Mat getAutoCerrelation(const Mat &blurred);
 int estimateKernelSize(const Mat &blurred);
 void cropBorder(Mat &image);
 float measureBlur(const Mat &grayBlurred);
 bool isBlurred(const Mat &grayBlurred);
+float getSNR(const Mat &grayBlurred);
 
 int main(int argc, char* argv[])
 {
@@ -32,9 +33,30 @@ int main(int argc, char* argv[])
     Mat blurred = imread(file, CV_LOAD_IMAGE_COLOR);
     Mat deblurred;
     Mat kernel;
-    blindDeblurring(blurred, deblurred, kernel, 100, 0.02);
+    blindDeblurring(blurred, deblurred, kernel, 100);
     imwrite(argv[2], deblurred);
     return 0;
+}
+
+float getSNR(const Mat &grayBlurred)
+{
+    Mat median;
+    medianBlur(grayBlurred, median, 3);
+    float numerator = 0;
+    float denominator = 0;
+    float res = 0;
+    for (int i = 0; i < grayBlurred.rows; i++)
+    {
+        for (int j = 0; j < grayBlurred.cols; j++)
+        {
+            numerator+=((grayBlurred.at<unsigned char>(i, j) - median.at<unsigned char>(i, j))
+                * (grayBlurred.at<unsigned char>(i, j) - median.at<unsigned char>(i, j)));
+            denominator+=(grayBlurred.at<unsigned char>(i, j) * grayBlurred.at<unsigned char>(i, j));
+        }
+    }
+    res = sqrt(numerator/denominator);
+    cout << "noise to signal ratio " << res << endl;
+    return res;
 }
 
 float measureBlur(const Mat &grayBlurred)
@@ -51,7 +73,6 @@ float measureBlur(const Mat &grayBlurred)
         }
     }
     sum/=(grayBlurred.rows * grayBlurred.cols);
-    cout << sum << endl;
     return sum;
 }
 
@@ -240,10 +261,11 @@ void normalizePSF(Mat &image)
     image/=sum;
 }
 
-void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters, float noisePower)
+void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters)
 {
     Mat grayBlurred;
     cvtColor(blurred, grayBlurred, CV_BGR2GRAY);
+    float noisePower = getSNR(grayBlurred);
     if (!isBlurred(grayBlurred))
     {
         cout << "not blurred" << endl;
