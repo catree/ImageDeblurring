@@ -10,7 +10,7 @@ using namespace std;
 #define MAX_ITERS_KERNEL_SIZE 10
 #define THRESH_PARAM 3.5                //threshold value(kernel size estimation) = maxValue / THRESH_PARAM
 #define FILTER_SIZE_PARAM 10            //filter size = imageSize / FILTER_SIZE_PARAM
-#define BLUR_STD_DEV 10                 //image blurred if stddev(laplacian) < BLUR_STD_DEV
+#define BLUR_STD_DEV 20                 //image blurred if stddev(laplacian) < BLUR_STD_DEV
 
 void computeDFT(const Mat &image, Mat *result);
 void computeIDFT(Mat *input, Mat &result);
@@ -22,6 +22,8 @@ void applyConstraints(Mat &image);
 Mat getAutoCerrelation(const Mat &blurred);
 int estimateKernelSize(const Mat &blurred);
 void cropBorder(Mat &image);
+float measureBlur(const Mat &grayBlurred);
+bool isBlurred(const Mat &grayBlurred);
 
 int main(int argc, char* argv[])
 {
@@ -33,6 +35,29 @@ int main(int argc, char* argv[])
     blindDeblurring(blurred, deblurred, kernel, 100, 0.02);
     imwrite(argv[2], deblurred);
     return 0;
+}
+
+float measureBlur(const Mat &grayBlurred)
+{
+    Mat dst;
+    Laplacian(grayBlurred, dst, -1, 3, 1, 0, BORDER_CONSTANT);
+    dst.convertTo(dst, CV_8UC1);
+    float sum = 0;
+    for (int i = 0; i < grayBlurred.rows; i++)
+    {
+        for (int j = 0; j < grayBlurred.cols; j++)
+        {
+            sum+=dst.at<unsigned char>(i, j);
+        }
+    }
+    sum/=(grayBlurred.rows * grayBlurred.cols);
+    cout << sum << endl;
+    return sum;
+}
+
+bool isBlurred(const Mat &grayBlurred)
+{
+    return measureBlur(grayBlurred) < BLUR_STD_DEV;
 }
 
 Mat getAutoCerrelation(const Mat &blurred)
@@ -219,6 +244,14 @@ void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters,
 {
     Mat grayBlurred;
     cvtColor(blurred, grayBlurred, CV_BGR2GRAY);
+    if (!isBlurred(grayBlurred))
+    {
+        cout << "not blurred" << endl;
+        deblurred = blurred.clone();
+        kernel = Mat::zeros(3, 3, CV_8UC1);
+        kernel.at<unsigned char>(1, 1) = 1;
+        return;
+    }
     Mat grayDeblurred;
     vector<Mat> blurredRGB(3);
     split(blurred, blurredRGB);
