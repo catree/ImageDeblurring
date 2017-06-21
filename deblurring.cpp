@@ -261,8 +261,7 @@ void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters)
 {
     Mat grayBlurred;
     cvtColor(blurred, grayBlurred, CV_BGR2GRAY);
-    //float noisePower = getInvSNR(grayBlurred);
-    float noisePower = 0.04;
+    float noisePower = getInvSNR(grayBlurred);
     if (!isBlurred(grayBlurred))
     {
         cout << "not blurred" << endl;
@@ -290,8 +289,21 @@ void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters)
 
 void blindDeblurringOneChannel(const Mat &blurred, Mat &deblurred, Mat &kernel, int kernelSize, int iters, float noisePower)
 {
-    Mat kernelCurrent = Mat::ones(kernelSize, kernelSize, CV_32FC1);
-    kernelCurrent/=(kernelSize * kernelSize);
+    Mat kernelCurrent = Mat::zeros(kernelSize, kernelSize, CV_32FC1);
+    int kernelNotZeroSize = kernelSize / 4;
+    if (!(kernelNotZeroSize & 1))
+    {
+        kernelNotZeroSize++;
+    }
+    for (int i = kernelSize / 2 - kernelNotZeroSize / 2; i <= kernelSize / 2 + kernelNotZeroSize / 2; i++)
+    {
+        for (int j = kernelSize / 2 - kernelNotZeroSize / 2; j <= kernelSize / 2 + kernelNotZeroSize / 2; j++)
+        {
+            kernelCurrent.at<float>(i, j) = 1.0f;
+        }
+    }
+    cout << kernelCurrent;
+    kernelCurrent/=(kernelNotZeroSize * kernelNotZeroSize);
     Mat deblurredCurrent = blurred.clone();
     for (int i = 0; i < 1; i++)
     {
