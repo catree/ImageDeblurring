@@ -234,16 +234,12 @@ void rotate(Mat &src, Mat &dst)
 
 void applyConstraints(Mat &image)
 {
+    double minVal;
+    double maxVal;
+    minMaxLoc(image, &minVal, &maxVal);
     for (int i = 0; i < image.rows; i++){
         for (int j = 0; j < image.cols; j++){
-            if (image.at<float>(i, j) < 0)
-            {
-                image.at<float>(i, j) = 0;
-            }
-            if (image.at<float>(i, j) > 255)
-            {
-                image.at<float>(i, j) = 255.0;
-            }
+            image.at<float>(i, j) = (image.at<float>(i, j) - minVal) / (maxVal - minVal) * 255.0f;
         }
     }
 }
@@ -265,7 +261,8 @@ void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters)
 {
     Mat grayBlurred;
     cvtColor(blurred, grayBlurred, CV_BGR2GRAY);
-    float noisePower = getInvSNR(grayBlurred);
+    //float noisePower = getInvSNR(grayBlurred);
+    float noisePower = 0.04;
     if (!isBlurred(grayBlurred))
     {
         cout << "not blurred" << endl;
@@ -296,11 +293,13 @@ void blindDeblurringOneChannel(const Mat &blurred, Mat &deblurred, Mat &kernel, 
     Mat kernelCurrent = Mat::ones(kernelSize, kernelSize, CV_32FC1);
     kernelCurrent/=(kernelSize * kernelSize);
     Mat deblurredCurrent = blurred.clone();
-    for (int i = 0; i < iters; i++)
+    for (int i = 0; i < 1; i++)
     {
         wienerFilter(blurred, kernelCurrent.clone(), deblurredCurrent, noisePower);
+        applyConstraints(deblurredCurrent);
         wienerFilter(blurred, deblurredCurrent.clone(), kernelCurrent, noisePower);
         kernelCurrent = kernelCurrent(Rect((blurred.cols - kernelSize)/2 ,(blurred.rows - kernelSize)/2, kernelSize, kernelSize));
+        applyConstraints(kernelCurrent);
         normalizePSF(kernelCurrent);
     }
     deblurred = deblurredCurrent.clone();
@@ -346,7 +345,6 @@ void wienerFilter(const Mat &blurredImage, const Mat &known, Mat &unknown, float
         }
     }
     computeIDFT(unknownFT, tempUnknown);
-    applyConstraints(tempUnknown);
     rotate(tempUnknown, tempUnknown);
     unknown = tempUnknown.clone();
 }
