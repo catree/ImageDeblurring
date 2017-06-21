@@ -24,7 +24,7 @@ int estimateKernelSize(const Mat &blurred);
 void cropBorder(Mat &image);
 float measureBlur(const Mat &grayBlurred);
 bool isBlurred(const Mat &grayBlurred);
-float getSNR(const Mat &grayBlurred);
+float getInvSNR(const Mat &grayBlurred);
 
 int main(int argc, char* argv[])
 {
@@ -38,7 +38,7 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-float getSNR(const Mat &grayBlurred)
+float getInvSNR(const Mat &grayBlurred)
 {
     Mat median;
     medianBlur(grayBlurred, median, 3);
@@ -265,7 +265,7 @@ void blindDeblurring(const Mat &blurred, Mat &deblurred, Mat &kernel, int iters)
 {
     Mat grayBlurred;
     cvtColor(blurred, grayBlurred, CV_BGR2GRAY);
-    float noisePower = getSNR(grayBlurred);
+    float noisePower = getInvSNR(grayBlurred);
     if (!isBlurred(grayBlurred))
     {
         cout << "not blurred" << endl;
