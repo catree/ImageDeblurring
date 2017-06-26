@@ -20,6 +20,7 @@ void cropBorder(Mat &image);
 float measureBlur(const Mat &grayBlurred);
 bool isBlurred(const Mat &grayBlurred);
 float getInvSNR(const Mat &grayBlurred);
+Mat erosion(const Mat &grayImage, int erosionSize);
 
 int main(int argc, char* argv[])
 {
@@ -28,9 +29,20 @@ int main(int argc, char* argv[])
     Mat blurred = imread(file, CV_LOAD_IMAGE_COLOR);
     Mat deblurred;
     Mat kernel;
-    blindDeblurring(blurred, deblurred, kernel, 80);
+    blindDeblurring(blurred, deblurred, kernel, 10);
     imwrite(argv[2], deblurred);
     return 0;
+}
+
+Mat erosion(const Mat &grayImage, int erosionSize)
+{
+    int erosionType = 0;
+    Mat element = getStructuringElement(erosionType,
+                                       Size(2 * erosionSize + 1, 2 * erosionSize + 1 ),
+                                       Point(erosionSize, erosionSize));
+    Mat eroded;
+    erode(grayImage, eroded, element);
+    return eroded.clone();
 }
 
 //TO-DO try Fast Noise Variance Estimation JOHN IMMERKÆR
@@ -292,34 +304,20 @@ void blindDeblurringOneChannel(const Mat &blurred, Mat &kernel, int kernelSize, 
     vector<float> blurValues;
     vector<Mat> kernels;
     Mat kernelCurrent = Mat::zeros(kernelSize, kernelSize, CV_32FC1);
-    //TO-DO if kernel size < 8 result bad(identity filter)
-    int kernelNotZeroSize = kernelSize / 4;
-    if (!(kernelNotZeroSize & 1))
-    {
-        kernelNotZeroSize++;
-    }
-    for (int i = kernelSize / 2 - kernelNotZeroSize / 2; i <= kernelSize / 2 + kernelNotZeroSize / 2; i++)
-    {
-        for (int j = kernelSize / 2 - kernelNotZeroSize / 2; j <= kernelSize / 2 + kernelNotZeroSize / 2; j++)
-        {
-            kernelCurrent.at<float>(i, j) = 1.0f;
-        }
-    }
-    kernelCurrent/=(kernelNotZeroSize * kernelNotZeroSize);
-    Mat deblurredCurrent = blurred.clone();
+    Mat deblurredCurrent = erosion(blurred, 2);
     for (int i = 0; i < iters; i++)
     {
-        kernels.push_back(kernelCurrent);
-        blurValues.push_back(measureBlur(deblurredCurrent));
-        wienerFilter(blurred, kernelCurrent.clone(), deblurredCurrent, noisePower);
-        applyConstraints(deblurredCurrent, 0);
         wienerFilter(blurred, deblurredCurrent.clone(), kernelCurrent, noisePower);
-        kernelCurrent = kernelCurrent(Rect((blurred.cols - kernelSize)/2 ,(blurred.rows - kernelSize)/2, kernelSize, kernelSize));
+        kernelCurrent = kernelCurrent(Rect((blurred.cols - kernelSize) / 2 ,(blurred.rows - kernelSize) / 2, kernelSize, kernelSize));
         double minVal;
         double maxVal;
         minMaxLoc(kernelCurrent, &minVal, &maxVal);
         applyConstraints(kernelCurrent, (float)maxVal / 15);
         normalizePSF(kernelCurrent);
+        wienerFilter(blurred, kernelCurrent.clone(), deblurredCurrent, noisePower);
+        applyConstraints(deblurredCurrent, 0);
+        kernels.push_back(kernelCurrent);
+        blurValues.push_back(measureBlur(deblurredCurrent));
         /*if (!isBlurred(deblurredCurrent)){
             cout << " iters made " << i << endl;
             break;
